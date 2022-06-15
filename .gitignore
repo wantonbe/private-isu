@@ -2,6 +2,9 @@ vendor/
 portal/log
 portal/tmp
 
+/webapp/logs/*
+!/webapp/logs/.gitkeep
+
 ### Portal
 # Ignore bundler config.
 /portal/.bundle
