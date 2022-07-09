@@ -5,6 +5,9 @@ portal/tmp
 /webapp/logs/*
 !/webapp/logs/.gitkeep
 
+/webapp/.idea/*
+!/webapp/.idea/.keep
+
 ### Portal
 # Ignore bundler config.
 /portal/.bundle
