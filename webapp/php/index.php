@@ -123,38 +123,47 @@ $container->set('helper', function ($c) {
             }
         }
 
-        public function make_posts(array $results, $options = []) {
+        public function make_posts(array $results, $options = [])
+        {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
             $posts = [];
+            $post_ids = array_column($results, "id");
+
+            $expand_holder = fn ($values) => implode(", ", array_fill(0, count($values), "?"));
+            $ps = $this->db()->prepare(<<<_SQL_
+                SELECT
+                c.post_id, c.id, c.user_id, c.comment, c.created_at, u.account_name
+                FROM comments AS c
+                INNER JOIN users AS u ON u.id = c.user_id
+                WHERE c.post_id IN ({$expand_holder($post_ids)})
+            _SQL_
+            );
+            $ps->execute($post_ids);
+            $posts_comments = $ps->fetchAll(PDO::FETCH_ASSOC|PDO::FETCH_GROUP);
+
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
+                $post_comments = $posts_comments[$post["id"]] ?? [];
+                $comments = $all_comments ? $post_comments : array_slice($post_comments, 0, 3);
+                $comments = array_map(function ($comment) {
+                    return array_filter($comment, fn ($value, $key) => in_array($key, ["post_id", "id", "user_id", "comment", "created_at"]), ARRAY_FILTER_USE_BOTH) + [
+                        "user" => [
+                            "account_name" => $comment["account_name"],
+                        ]
+                    ];
+                }, $comments);
 
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $post['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $post['user_id']);
-                if ($post['user']['del_flg'] == 0) {
-                    $posts[] = $post;
-                }
-                if (count($posts) >= POSTS_PER_PAGE) {
-                    break;
-                }
+                $posts[] = array_filter($post, fn ($value, $key) => in_array($key, ["id", "user_id", "body", "mime", "created_at", "comments"]), ARRAY_FILTER_USE_BOTH) + [
+                    "comment_count" => count($post_comments),
+                    "comments" => $comments,
+                    "user" => [
+                        "account_name" => $post["account_name"],
+                    ]
+                ];
             }
             return $posts;
         }
-
     };
 });
 
@@ -191,9 +200,7 @@ function validate_user($account_name, $password) {
 }
 
 function digest($src) {
-    // opensslのバージョンによっては (stdin)= というのがつくので取る
-    $src = escapeshellarg($src);
-    return trim(`printf "%s" {$src} | openssl dgst -sha512 | sed 's/^.*= //'`);
+    return openssl_digest($src, "sha512");
 }
 
 function calculate_salt($account_name) {
@@ -295,7 +302,17 @@ $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
+    $ps = $db->prepare(<<<_SQL_
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        INNER JOIN users AS u ON u.id = p.user_id
+        WHERE `u`.`del_flg` = 0
+        ORDER BY p.created_at DESC
+        LIMIT 20;
+    _SQL_
+    );
     $ps->execute();
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
@@ -311,7 +328,18 @@ $app->get('/posts', function (Request $request, Response $response) {
     $params = $request->getQueryParams();
     $max_created_at = $params['max_created_at'] ?? null;
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` WHERE `created_at` <= ? ORDER BY `created_at` DESC');
+    $ps = $db->prepare(<<<_SQL_
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        INNER JOIN users AS u ON u.id = p.user_id
+        WHERE `u`.`del_flg` = 0
+        AND `p`.`created_at` <= ?
+        ORDER BY `p`.`created_at` DESC
+        LIMIT 20;
+    _SQL_
+    );
     $ps->execute([$max_created_at === null ? null : $max_created_at]);
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);
@@ -321,7 +349,15 @@ $app->get('/posts', function (Request $request, Response $response) {
 
 $app->get('/posts/{id}', function (Request $request, Response $response, $args) {
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT * FROM `posts` WHERE `id` = ?');
+    $ps = $db->prepare(<<<_SQL_
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        INNER JOIN users AS u ON u.id = p.user_id
+        WHERE `p`.`id` = ?
+    _SQL_
+    );
     $ps->execute([$args['id']]);
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results, ['all_comments' => true]);
@@ -492,7 +528,16 @@ $app->get('/@{account_name}', function (Request $request, Response $response, $a
         return $response->withStatus(404);
     }
 
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `created_at`, `mime` FROM `posts` WHERE `user_id` = ? ORDER BY `created_at` DESC');
+    $ps = $db->prepare(<<<_SQL_
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        INNER JOIN users AS u ON u.id = p.user_id
+        WHERE `p`.`user_id` = ?
+        ORDER BY `p`.`created_at` DESC
+    _SQL_
+    );
     $ps->execute([$user['id']]);
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
     $posts = $this->get('helper')->make_posts($results);

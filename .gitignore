@@ -8,6 +8,12 @@ portal/tmp
 /webapp/.idea/*
 !/webapp/.idea/.keep
 
+/webapp/public/image/*
+!/webapp/public/image/.keep
+
+/webapp/php/exports/static/image/*
+!/webapp/php/exports/static/image/.keep
+
 ### Portal
 # Ignore bundler config.
 /portal/.bundle
