@@ -201,9 +201,7 @@ function validate_user($account_name, $password) {
 }
 
 function digest($src) {
-    // opensslのバージョンによっては (stdin)= というのがつくので取る
-    $src = escapeshellarg($src);
-    return trim(`printf "%s" {$src} | openssl dgst -sha512 | sed 's/^.*= //'`);
+    return openssl_digest($src, "sha512");
 }
 
 function calculate_salt($account_name) {
