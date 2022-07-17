@@ -155,6 +155,50 @@ $container->set('helper', function ($c) {
             return $posts;
         }
 
+        /**
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        LEFT JOIN users AS u ON u.id = p.user_id AND `u`.`del_flg` != 0
+        ORDER BY p.created_at DESC LIMIT 20;
+
+
+        SELECT * FROM comments AS c WHERE c.post_id IN ()
+        LEFT JOIN users AS u ON u.id = c.user_id
+        ORDER BY c.created_at DESC;
+        **/
+        public function make_posts_with_relations(array $results, array $options = [])
+        {
+            $options += ['all_comments' => false];
+            $all_comments = $options['all_comments'];
+
+            $posts = [];
+            foreach ($results as $post) {
+                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
+                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
+                if (!$all_comments) {
+                    $query .= ' LIMIT 3';
+                }
+
+                $ps = $this->db()->prepare($query);
+                $ps->execute([$post['id']]);
+                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
+                foreach ($comments as &$comment) {
+                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
+                }
+                unset($comment);
+                $post['comments'] = array_reverse($comments);
+
+                $posts[] = array_filter($post, fn ($value, $key) => in_array($key, ["id", "user_id", "body", "mime", "created_at", "comment_count", "comments"]), ARRAY_FILTER_USE_BOTH) + [
+                    "user" => [
+                        "account_name" => $post["account_name"],
+                    ]
+                ];
+            }
+
+            return $posts;
+        }
     };
 });
 
@@ -295,10 +339,20 @@ $app->get('/', function (Request $request, Response $response) {
     $me = $this->get('helper')->get_session_user();
 
     $db = $this->get('db');
-    $ps = $db->prepare('SELECT `id`, `user_id`, `body`, `mime`, `created_at` FROM `posts` ORDER BY `created_at` DESC');
+    $ps = $db->prepare(<<<_SQL_
+        SELECT
+        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
+        `u`.`account_name`, `u`.`del_flg`
+        FROM posts AS p
+        INNER JOIN users AS u ON u.id = p.user_id
+        WHERE `u`.`del_flg` = 1
+        ORDER BY p.created_at DESC
+        LIMIT 20;
+    _SQL_
+    );
     $ps->execute();
     $results = $ps->fetchAll(PDO::FETCH_ASSOC);
-    $posts = $this->get('helper')->make_posts($results);
+    $posts = $this->get('helper')->make_posts_with_relations($results);
 
     return $this->get('view')->render($response, 'index.php', [
         'posts' => $posts,
