@@ -155,42 +155,40 @@ $container->set('helper', function ($c) {
             return $posts;
         }
 
-        /**
-        SELECT
-        `p`.`id`, `p`.`user_id`, `p`.`body`, `p`.`mime`, `p`.`created_at`,
-        `u`.`account_name`, `u`.`del_flg`
-        FROM posts AS p
-        LEFT JOIN users AS u ON u.id = p.user_id AND `u`.`del_flg` != 0
-        ORDER BY p.created_at DESC LIMIT 20;
-
-
-        SELECT * FROM comments AS c WHERE c.post_id IN ()
-        LEFT JOIN users AS u ON u.id = c.user_id
-        ORDER BY c.created_at DESC;
-        **/
         public function make_posts_with_relations(array $results, array $options = [])
         {
             $options += ['all_comments' => false];
             $all_comments = $options['all_comments'];
 
             $posts = [];
+            $post_ids = array_column($results, "id");
+
+            $expand_holder = fn ($values) => implode(", ", array_fill(0, count($values), "?"));
+            $ps = $this->db()->prepare(<<<_SQL_
+                SELECT
+                c.post_id, c.id, c.user_id, c.comment, c.created_at, u.account_name
+                FROM comments AS c
+                INNER JOIN users AS u ON u.id = c.user_id
+                WHERE c.post_id IN ({$expand_holder($post_ids)})
+            _SQL_
+            );
+            $ps->execute($post_ids);
+            $posts_comments = $ps->fetchAll(PDO::FETCH_ASSOC|PDO::FETCH_GROUP);
+
             foreach ($results as $post) {
-                $post['comment_count'] = $this->fetch_first('SELECT COUNT(*) AS `count` FROM `comments` WHERE `post_id` = ?', $post['id'])['count'];
-                $query = 'SELECT * FROM `comments` WHERE `post_id` = ? ORDER BY `created_at` DESC';
-                if (!$all_comments) {
-                    $query .= ' LIMIT 3';
-                }
+                $post_comments = $posts_comments[$post["id"]] ?? [];
+                $comments = $all_comments ? $post_comments : array_slice($post_comments, 3);
+                $comments = array_map(function ($comment) {
+                    return array_filter($comment, fn ($value, $key) => in_array($key, ["post_id", "id", "user_id", "comment", "created_at"]), ARRAY_FILTER_USE_BOTH) + [
+                        "user" => [
+                            "account_name" => $comment["account_name"],
+                        ]
+                    ];
+                }, $comments);
 
-                $ps = $this->db()->prepare($query);
-                $ps->execute([$post['id']]);
-                $comments = $ps->fetchAll(PDO::FETCH_ASSOC);
-                foreach ($comments as &$comment) {
-                    $comment['user'] = $this->fetch_first('SELECT * FROM `users` WHERE `id` = ?', $comment['user_id']);
-                }
-                unset($comment);
-                $post['comments'] = array_reverse($comments);
-
-                $posts[] = array_filter($post, fn ($value, $key) => in_array($key, ["id", "user_id", "body", "mime", "created_at", "comment_count", "comments"]), ARRAY_FILTER_USE_BOTH) + [
+                $posts[] = array_filter($post, fn ($value, $key) => in_array($key, ["id", "user_id", "body", "mime", "created_at", "comments"]), ARRAY_FILTER_USE_BOTH) + [
+                    "comment_count" => count($post_comments),
+                    "comments" => $comments,
                     "user" => [
                         "account_name" => $post["account_name"],
                     ]
