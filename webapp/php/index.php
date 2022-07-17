@@ -343,7 +343,7 @@ $app->get('/', function (Request $request, Response $response) {
         `u`.`account_name`, `u`.`del_flg`
         FROM posts AS p
         INNER JOIN users AS u ON u.id = p.user_id
-        WHERE `u`.`del_flg` = 1
+        WHERE `u`.`del_flg` = 0
         ORDER BY p.created_at DESC
         LIMIT 20;
     _SQL_
