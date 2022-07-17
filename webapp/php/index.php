@@ -145,7 +145,7 @@ $container->set('helper', function ($c) {
 
             foreach ($results as $post) {
                 $post_comments = $posts_comments[$post["id"]] ?? [];
-                $comments = $all_comments ? $post_comments : array_slice($post_comments, 3);
+                $comments = $all_comments ? $post_comments : array_slice($post_comments, 0, 3);
                 $comments = array_map(function ($comment) {
                     return array_filter($comment, fn ($value, $key) => in_array($key, ["post_id", "id", "user_id", "comment", "created_at"]), ARRAY_FILTER_USE_BOTH) + [
                         "user" => [
@@ -162,7 +162,6 @@ $container->set('helper', function ($c) {
                     ]
                 ];
             }
-
             return $posts;
         }
     };
